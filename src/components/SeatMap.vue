@@ -17,6 +17,9 @@ const hold = ref(null)
 const secondsLeft = ref(0)
 const booking = ref({ loading: false, done: null, error: '' })
 
+const seatPrice = ref(75000)
+const promoCode = ref('')
+const quote = ref(null)
 const MAX_SEATS = 8
 const SEAT_TYPE = { NORMAL: 0, VIP: 1, COUPLE: 2 }
 const STATUS = { AVAILABLE: 'available', BOOKED: 'booked', SELECTED: 'selected' }
@@ -73,7 +76,7 @@ const rows = computed(() => {
 })
 
 function isBlocked(seat) {
-  return !!(seat.isBooked || seat.isHeld)
+  return !!(seat.isBooked || seat.isHeld || seat.isBlocked)
 }
 
 function getSeatStatus(seat) {
@@ -195,7 +198,11 @@ const snackTotal = computed(() =>
   concessions.value.reduce((sum, item) => sum + item.price * (concessionQty.value[item.id] || 0), 0)
 )
 
-const totalPrice = computed(() => selectedList.value.length * 75000 + snackTotal.value)
+const ticketTotal = computed(() => selectedList.value.length * Number(seatPrice.value || 75000))
+const totalPrice = computed(() => {
+  if (quote.value?.ok) return Number(quote.value.total)
+  return ticketTotal.value + snackTotal.value + Number(quote.value?.surcharge || 0)
+})
 
 const concessionGroups = computed(() => {
   const groups = new Map()
@@ -219,6 +226,26 @@ function selectedConcessions() {
     .map((item) => ({ concessionId: item.id, quantity: concessionQty.value[item.id] }))
 }
 
+async function refreshQuote() {
+  if (!selectedList.value.length) {
+    quote.value = null
+    return
+  }
+  try {
+    quote.value = await apiFetch('/api/promotions/quote', {
+      method: 'POST',
+      body: JSON.stringify({
+        code: promoCode.value.trim() || null,
+        showtimeId: props.showTimeId,
+        seatCount: selectedList.value.length,
+        snackTotal: snackTotal.value,
+      }),
+    })
+  } catch {
+    quote.value = null
+  }
+}
+
 onMounted(async () => {
   try {
     const data = await apiFetch('/api/concessions')
@@ -226,18 +253,29 @@ onMounted(async () => {
   } catch {
     concessions.value = []
   }
+  try {
+    const settings = await apiFetch('/api/settings/public')
+    if (settings?.seatPrice) seatPrice.value = Number(settings.seatPrice)
+  } catch {
+    seatPrice.value = 75000
+  }
 })
 
 watch(selectedIds, () => {
   if (booking.value.done) return
   scheduleHold()
+  refreshQuote()
+})
+watch([snackTotal, promoCode], () => {
+  if (booking.value.done) return
+  refreshQuote()
 })
 watch(
   () => props.seats,
   (seats) => {
     if (booking.value.done) return
     const list = seats || []
-    const blocked = new Set(list.filter((s) => s.isBooked || s.isHeld).map((s) => s.seatId))
+    const blocked = new Set(list.filter((s) => s.isBooked || s.isHeld || s.isBlocked).map((s) => s.seatId))
     if ([...selectedIds.value].some((id) => blocked.has(id))) {
       selectedIds.value = new Set([...selectedIds.value].filter((id) => !blocked.has(id)))
       booking.value.error = 'Một ghế vừa được người khác giữ hoặc đặt.'
@@ -293,6 +331,7 @@ async function confirmBooking() {
         showtimeId: props.showTimeId,
         seatIds,
         concessions: selectedConcessions(),
+        promoCode: promoCode.value.trim() || null,
       }),
     })
     hold.value = null
@@ -406,6 +445,13 @@ async function confirmBooking() {
             <span class="summary-label">Bắp nước</span>
             <span class="summary-value">{{ snackTotal.toLocaleString('vi-VN') }}₫</span>
           </div>
+          <label class="promo-field">
+            Mã giảm giá
+            <input v-model="promoCode" placeholder="Nhập mã, ví dụ T3VUI" />
+            <router-link to="/khuyen-mai">Lấy mã ở Khuyến mãi</router-link>
+          </label>
+          <p v-if="quote && promoCode && !quote.ok" class="promo-msg">{{ quote.message }}</p>
+          <p v-else-if="quote?.discount" class="promo-ok">-{{ Number(quote.discount).toLocaleString('vi-VN') }}₫ {{ quote.name }}</p>
           <div class="summary-price">
             <span class="summary-label">Tạm tính</span>
             <span class="summary-total">{{ totalPrice.toLocaleString('vi-VN') }}₫</span>
@@ -640,6 +686,25 @@ async function confirmBooking() {
   font-weight: 700;
   color: #fbbf24;
 }
+.promo-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.promo-field a { color: #fca5a5; font-size: 0.75rem; }
+.promo-field input {
+  width: 140px;
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  background: rgba(0,0,0,0.35);
+  color: #fff;
+  font-family: inherit;
+}
+.promo-msg { color: #fca5a5; font-size: 0.8rem; margin: 0; }
+.promo-ok { color: #86efac; font-size: 0.8rem; margin: 0; }
 .summary-value {
   font-size: 0.9rem;
   color: var(--text-primary);
