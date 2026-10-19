@@ -15,6 +15,7 @@ const error = ref('')
 const search = ref('')
 
 const showModal = ref(false)
+const viewing = ref(null)
 const editing = ref(null)
 const saving = ref(false)
 const formError = ref('')
@@ -222,7 +223,7 @@ onMounted(fetchList)
             <th style="width:160px">Thể loại</th>
             <th style="width:130px">Khởi chiếu</th>
             <th style="width:130px">Trạng thái</th>
-            <th style="width:120px">Thao tác</th>
+            <th style="width:150px">Thao tác</th>
           </tr>
         </thead>
         <tbody>
@@ -241,12 +242,13 @@ onMounted(fetchList)
               </div>
             </td>
             <td>
-              <div class="cell-title">{{ m.title }}</div>
-              <div v-if="m.director" class="cell-sub">ĐD: {{ m.director }}</div>
+              <div class="cell-title" :title="m.director ? `${m.title} · ${m.director}` : m.title">
+                {{ m.title }}<span v-if="m.director" class="cell-sub"> · {{ m.director }}</span>
+              </div>
             </td>
-            <td>{{ formatDuration(m.duration) }}</td>
+            <td class="nowrap">{{ formatDuration(m.duration) }}</td>
             <td>
-              <span v-if="m.genre" class="genre-tag">{{ m.genre }}</span>
+              <span v-if="m.genre" class="genre-tag" :title="m.genre">{{ m.genre }}</span>
               <span v-else class="cell-muted">—</span>
             </td>
             <td>
@@ -262,6 +264,9 @@ onMounted(fetchList)
             </td>
             <td>
               <div class="actions">
+                <button class="btn-icon" @click="viewing = m" title="Xem chi tiết">
+                  <AppIcon name="eye" :size="16" />
+                </button>
                 <button class="btn-icon" @click="openEdit(m)" title="Sửa">
                   <AppIcon name="edit" :size="16" />
                 </button>
@@ -275,6 +280,32 @@ onMounted(fetchList)
       </table>
     </div>
     <AdminPager v-if="!loading && !error" v-model:page="page" :page-count="pageCount" :total="total" />
+
+    <div v-if="viewing" class="modal-backdrop" @click.self="viewing = null">
+      <div class="modal detail-modal">
+        <div class="modal-head">
+          <h3>Chi tiết phim</h3>
+          <button class="modal-close" @click="viewing = null"><AppIcon name="x" :size="18" /></button>
+        </div>
+        <div class="modal-body detail-body">
+          <img v-if="viewing.posterUrl" :src="viewing.posterUrl" :alt="viewing.title" class="detail-poster" />
+          <div class="detail-copy">
+            <h4>{{ viewing.title }}</h4>
+            <p>{{ formatDuration(viewing.duration) }} · {{ viewing.genre || 'Chưa có thể loại' }}</p>
+            <p>Đạo diễn: {{ viewing.director || '—' }}</p>
+            <p>Khởi chiếu: {{ viewing.releaseDate ? new Date(viewing.releaseDate).toLocaleDateString('vi-VN') : '—' }}</p>
+            <p>Quốc gia: {{ viewing.country || '—' }} · {{ viewing.language || 'Chưa có ngôn ngữ' }}</p>
+            <p>Diễn viên: {{ viewing.cast || '—' }}</p>
+            <p>Điểm: {{ viewing.rating ?? '—' }} · {{ viewing.isActive ? 'Đang chiếu' : 'Ngừng chiếu' }}</p>
+            <p class="detail-desc">{{ viewing.description || 'Chưa có mô tả.' }}</p>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-secondary" @click="viewing = null">Đóng</button>
+          <button class="btn btn-primary" @click="openEdit(viewing); viewing = null">Sửa phim</button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="showModal" class="modal-backdrop" @click.self="closeModal">
       <div class="modal">
@@ -406,7 +437,7 @@ onMounted(fetchList)
 @keyframes spin { to { transform: rotate(360deg); } }
 .table-wrap {
   background: var(--bg-card); border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg); overflow: hidden;
+  border-radius: var(--radius-lg); overflow-x: auto;
 }
 .data-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .data-table thead { background: rgba(255, 255, 255, 0.03); }
@@ -419,12 +450,16 @@ onMounted(fetchList)
 .data-table td {
   padding: 0.9rem 1rem; color: var(--text-secondary);
   border-bottom: 1px solid rgba(255, 255, 255, 0.03); vertical-align: middle;
+  white-space: nowrap;
 }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
 .cell-id { color: var(--accent-gold); font-weight: 700; font-family: monospace; }
-.cell-title { color: var(--text-primary); font-weight: 600; font-size: 0.9rem; }
-.cell-sub { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.2rem; }
+.cell-title {
+  color: var(--text-primary); font-weight: 600; font-size: 0.9rem;
+  max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cell-sub { font-size: 0.75rem; color: var(--text-muted); font-weight: 500; }
 .cell-muted { color: var(--text-dim); }
 .row-poster { width: 40px; height: 56px; border-radius: 6px; object-fit: cover; display: block; }
 .row-poster-fallback {
@@ -433,10 +468,17 @@ onMounted(fetchList)
   display: flex; align-items: center; justify-content: center; color: var(--text-muted);
 }
 .genre-tag {
-  display: inline-block; padding: 0.2rem 0.55rem;
+  display: inline-block; max-width: 150px; padding: 0.2rem 0.55rem;
   background: rgba(59, 130, 246, 0.12); color: #93c5fd;
   border-radius: 6px; font-size: 0.75rem; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle;
 }
+.detail-body { display: grid; grid-template-columns: 140px 1fr; gap: 1rem; }
+.detail-poster { width: 140px; height: 200px; object-fit: cover; border-radius: 10px; }
+.detail-copy h4 { margin: 0 0 0.4rem; }
+.detail-copy p { margin: 0.2rem 0; color: var(--text-secondary); }
+.detail-desc { white-space: normal; line-height: 1.5; }
+.detail-modal { max-width: 680px; }
 .badge {
   display: inline-flex; align-items: center; gap: 0.35rem;
   padding: 0.3rem 0.7rem; border-radius: 999px;
