@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { useAuth } from '../auth'
 import AppIcon from '../components/AppIcon.vue'
@@ -9,6 +9,7 @@ const router = useRouter()
 const auth = useAuth()
 
 const sidebarOpen = ref(false)
+const userMenuOpen = ref(false)
 
 const menuItems = [
   { name: 'Ca trực', path: '/staff', icon: 'dashboard', exact: true },
@@ -42,6 +43,13 @@ const userInitial = computed(() => {
 function closeSidebar() {
   sidebarOpen.value = false
 }
+
+function closeUserMenu() {
+  userMenuOpen.value = false
+}
+
+onMounted(() => document.addEventListener('click', closeUserMenu))
+onBeforeUnmount(() => document.removeEventListener('click', closeUserMenu))
 </script>
 
 <template>
@@ -73,16 +81,6 @@ function closeSidebar() {
         </RouterLink>
       </nav>
 
-      <div class="sidebar-footer">
-        <RouterLink to="/" class="nav-item">
-          <AppIcon name="home" :size="18" class="nav-icon" />
-          <span class="nav-label">Về trang chủ</span>
-        </RouterLink>
-        <button class="nav-item logout-btn" @click="handleLogout">
-          <AppIcon name="logout" :size="18" class="nav-icon" />
-          <span class="nav-label">Đăng xuất</span>
-        </button>
-      </div>
     </aside>
 
     <!-- Backdrop mobile -->
@@ -98,10 +96,25 @@ function closeSidebar() {
         <h1 class="topbar-title">{{ pageTitle }}</h1>
 
         <div class="topbar-right">
-          <span class="user-role-badge">STAFF</span>
-          <div class="user-info">
-            <span class="user-avatar">{{ userInitial }}</span>
-            <span class="user-name">{{ auth.user.value?.fullName }}</span>
+          <div class="user-wrap" @click.stop>
+            <button class="user-btn" type="button" @click="userMenuOpen = !userMenuOpen">
+              <span class="user-role-badge">STAFF</span>
+              <span class="user-avatar">{{ userInitial }}</span>
+              <span class="user-name">{{ auth.user.value?.fullName }}</span>
+              <span class="chevron" :class="{ open: userMenuOpen }">▾</span>
+            </button>
+            <div v-if="userMenuOpen" class="user-menu">
+              <div class="user-menu-head">
+                <span class="user-menu-name">{{ auth.user.value?.fullName }}</span>
+                <span class="user-menu-email">{{ auth.user.value?.email }}</span>
+              </div>
+              <RouterLink to="/" class="user-menu-item" @click="userMenuOpen = false">
+                <AppIcon name="home" :size="16" /> Về trang chủ
+              </RouterLink>
+              <button class="user-menu-item logout" type="button" @click="handleLogout">
+                <AppIcon name="logout" :size="16" /> Đăng xuất
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -210,16 +223,6 @@ function closeSidebar() {
 .nav-icon { flex-shrink: 0; color: inherit; }
 .nav-label { flex: 1; }
 
-.sidebar-footer {
-  padding: 0.75rem;
-  border-top: 1px solid var(--border-subtle);
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-}
-.logout-btn { color: #fca5a5; }
-.logout-btn:hover { background: rgba(248, 113, 113, 0.1); }
-
 .sidebar-backdrop {
   position: fixed;
   inset: 0;
@@ -284,11 +287,62 @@ function closeSidebar() {
   border-radius: 999px;
   letter-spacing: 0.05em;
 }
-.user-info {
+.user-wrap { position: relative; }
+.user-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.25rem 0.7rem 0.25rem 0.25rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+}
+.user-btn:hover { background: rgba(255, 255, 255, 0.08); }
+.chevron { color: #9ca3af; font-size: 0.75rem; transition: transform 0.2s; }
+.chevron.open { transform: rotate(180deg); }
+.user-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 230px;
+  background: #141414;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 0.45rem;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
+  z-index: 80;
+}
+.user-menu-head {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.55rem 0.7rem 0.7rem;
+  margin-bottom: 0.35rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.user-menu-name { font-weight: 700; }
+.user-menu-email { color: var(--text-muted); font-size: 0.75rem; word-break: break-all; }
+.user-menu-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+  width: 100%;
+  padding: 0.6rem 0.7rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: #e5e7eb;
+  text-decoration: none;
+  font-family: inherit;
+  font-size: 0.9rem;
+  cursor: pointer;
+  text-align: left;
 }
+.user-menu-item:hover { background: rgba(255, 255, 255, 0.06); }
+.user-menu-item.logout { color: #fca5a5; }
 .user-avatar {
   width: 32px; height: 32px;
   border-radius: 50%;
