@@ -14,6 +14,7 @@ const rooms = ref([])
 const loading = ref(true)
 const error = ref('')
 const showModal = ref(false)
+const viewing = ref(null)
 const editing = ref(null)
 const saving = ref(false)
 const formError = ref('')
@@ -84,6 +85,12 @@ async function save() {
     toast.warning('Vui lòng điền đầy đủ thông tin')
     return
   }
+  const start = new Date(form.value.startTime)
+  if (Number.isNaN(start.getTime()) || start.getTime() <= Date.now()) {
+    formError.value = 'Giờ chiếu đã qua, không lưu suất này.'
+    toast.warning(formError.value)
+    return
+  }
 
   saving.value = true
   const isEdit = !!editing.value
@@ -93,13 +100,16 @@ async function save() {
       ? `/api/admin/showtimes/${editing.value.id}`
       : '/api/admin/showtimes'
     const method = isEdit ? 'PUT' : 'POST'
+    const startTime = form.value.startTime.length === 16
+      ? `${form.value.startTime}:00`
+      : form.value.startTime
 
     await apiFetch(path, {
       method,
       body: JSON.stringify({
         movieId: Number(form.value.movieId),
         roomId: Number(form.value.roomId),
-        startTime: new Date(form.value.startTime).toISOString(),
+        startTime,
       }),
     })
 
@@ -135,6 +145,15 @@ function formatDateTime(d) {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+function movieOf(st) {
+  return movies.value.find((m) => m.id === st.movieId)
+}
+
+function endTime(st) {
+  const minutes = Number(movieOf(st)?.duration || 0)
+  return new Date(new Date(st.startTime).getTime() + minutes * 60000)
 }
 
 function fillPercent(booked, total) {
@@ -174,19 +193,19 @@ onMounted(fetchAll)
             <th style="width:140px">Phòng</th>
             <th style="width:220px">Thời gian</th>
             <th style="width:180px">Đã đặt</th>
-            <th style="width:120px">Thao tác</th>
+            <th style="width:140px">Thao tác</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="st in pageItems" :key="st.id">
             <td class="cell-id">#{{ st.id }}</td>
             <td>
-              <div class="cell-title">{{ st.movieTitle }}</div>
+              <div class="cell-title" :title="st.movieTitle">{{ st.movieTitle }}</div>
             </td>
             <td>
               <span class="room-tag">{{ st.roomName }}</span>
             </td>
-            <td>{{ formatDateTime(st.startTime) }}</td>
+            <td class="nowrap">{{ formatDateTime(st.startTime) }}</td>
             <td>
               <div class="progress-cell">
                 <div class="progress-row">
@@ -205,6 +224,9 @@ onMounted(fetchAll)
             </td>
             <td>
               <div class="actions">
+                <button class="btn-icon" @click="viewing = st" title="Xem chi tiết">
+                  <AppIcon name="eye" :size="16" />
+                </button>
                 <button class="btn-icon" @click="openEdit(st)" title="Sửa">
                   <AppIcon name="edit" :size="16" />
                 </button>
@@ -218,6 +240,27 @@ onMounted(fetchAll)
       </table>
     </div>
     <AdminPager v-if="!loading && !error" v-model:page="page" :page-count="pageCount" :total="total" />
+
+    <div v-if="viewing" class="modal-backdrop" @click.self="viewing = null">
+      <div class="modal">
+        <div class="modal-head">
+          <h3>Chi tiết suất chiếu #{{ viewing.id }}</h3>
+          <button class="modal-close" @click="viewing = null"><AppIcon name="x" :size="18" /></button>
+        </div>
+        <div class="modal-body">
+          <p><strong>{{ viewing.movieTitle }}</strong></p>
+          <p>Phòng: {{ viewing.roomName }}</p>
+          <p>Bắt đầu: {{ formatDateTime(viewing.startTime) }}</p>
+          <p>Kết thúc: {{ formatDateTime(endTime(viewing)) }} · {{ movieOf(viewing)?.duration || 0 }} phút</p>
+          <p>Suất sau trong phòng này được mở từ {{ formatDateTime(new Date(endTime(viewing).getTime() + 30 * 60000)) }}</p>
+          <p>Đã đặt: {{ viewing.bookedSeats }}/{{ viewing.totalSeats }} ghế ({{ Math.round(fillPercent(viewing.bookedSeats, viewing.totalSeats)) }}%)</p>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-secondary" @click="viewing = null">Đóng</button>
+          <button class="btn btn-primary" @click="openEdit(viewing); viewing = null">Sửa suất</button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="showModal" class="modal-backdrop" @click.self="closeModal">
       <div class="modal">
@@ -250,6 +293,7 @@ onMounted(fetchAll)
             <label>Thời gian bắt đầu <span class="required">*</span></label>
             <input v-model="form.startTime" type="datetime-local" />
           </div>
+          <p class="gap-note">Cùng một phòng, suất sau phải cách ít nhất 30 phút kể từ lúc phim trước kết thúc.</p>
           <p v-if="formError" class="form-error">{{ formError }}</p>
         </div>
         <div class="modal-foot">
@@ -298,7 +342,7 @@ onMounted(fetchAll)
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  overflow: hidden;
+  overflow-x: auto;
 }
 .data-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 .data-table thead { background: rgba(255, 255, 255, 0.03); }
@@ -318,6 +362,7 @@ onMounted(fetchAll)
   color: var(--text-secondary);
   border-bottom: 1px solid rgba(255, 255, 255, 0.03);
   vertical-align: middle;
+  white-space: nowrap;
 }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr:hover { background: rgba(255, 255, 255, 0.02); }
@@ -327,7 +372,12 @@ onMounted(fetchAll)
   font-weight: 700;
   font-family: monospace;
 }
-.cell-title { color: var(--text-primary); font-weight: 600; }
+.cell-title {
+  color: var(--text-primary); font-weight: 600;
+  max-width: 240px; overflow: hidden; text-overflow: ellipsis;
+}
+.gap-note { margin: 0; color: #93c5fd; font-size: 0.85rem; }
+.modal-body p { margin: 0.25rem 0; }
 
 .room-tag {
   display: inline-block;
