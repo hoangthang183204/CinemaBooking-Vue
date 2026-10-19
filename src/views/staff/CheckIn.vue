@@ -82,27 +82,32 @@ async function checkIn() {
       raw: true,
       body: JSON.stringify({ qrCode: code }),
     })
-
+    const data = json?.data || {}
+    const tone = data.tone || 'ok'
     lastResult.value = {
-      success: true,
-      message: json?.message || 'Check-in thành công',
+      tone,
+      success: tone === 'ok',
+      message: data.message || json?.message || 'Vé hợp lệ',
+      room: data.roomName,
+      movie: data.movieTitle,
+      seat: data.seatNumber,
+      showTime: data.showTimeStart,
       code,
       time: new Date(),
     }
-
     history.value.unshift(lastResult.value)
     if (history.value.length > 10) history.value.pop()
-
-    toast.success('Vé hợp lệ, cho khách vào phòng')
-    qrInput.value = ''
+    if (tone === 'ok') toast.success(lastResult.value.message)
+    else if (tone === 'wrong') toast.warning(lastResult.value.message)
+    else toast.error(lastResult.value.message)
+    if (tone === 'ok') qrInput.value = ''
   } catch (e) {
-    lastResult.value = {
-      success: false,
-      message: e.message,
-      code,
-      time: new Date(),
-    }
-    toast.error('Check-in thất bại: ' + e.message)
+    const message = e.message || 'Không soát được vé'
+    const tone = /đã sử dụng/i.test(message) ? 'used' : /sai suất/i.test(message) ? 'wrong' : 'unpaid'
+    lastResult.value = { tone, success: false, message, code, time: new Date() }
+    history.value.unshift(lastResult.value)
+    if (tone === 'wrong') toast.warning(message)
+    else toast.error(message)
   } finally {
     scanning.value = false
   }
@@ -167,15 +172,16 @@ function formatTime(d) {
       </form>
 
       <!-- Kết quả -->
-      <div v-if="lastResult" class="result" :class="lastResult.success ? 'success' : 'error'">
+      <div v-if="lastResult" class="result" :class="lastResult.tone || (lastResult.success ? 'ok' : 'used')">
         <div class="result-icon">
-          <AppIcon :name="lastResult.success ? 'check' : 'x'" :size="24" />
+          <AppIcon :name="lastResult.tone === 'ok' ? 'check' : 'x'" :size="24" />
         </div>
         <div class="result-content">
-          <div class="result-title">
-            {{ lastResult.success ? 'Cho vào phòng' : 'Không cho vào' }}
+          <div class="result-title">{{ lastResult.message }}</div>
+          <div v-if="lastResult.movie" class="result-message">
+            {{ lastResult.movie }} · Ghế {{ lastResult.seat || '—' }}
+            <template v-if="lastResult.showTime"> · {{ new Date(lastResult.showTime).toLocaleString('vi-VN') }}</template>
           </div>
-          <div class="result-message">{{ lastResult.message }}</div>
           <div class="result-code">Mã: {{ lastResult.code }}</div>
         </div>
       </div>
@@ -195,7 +201,7 @@ function formatTime(d) {
           v-for="(h, i) in history"
           :key="i"
           class="history-item"
-          :class="h.success ? 'success' : 'error'"
+          :class="h.tone || (h.success ? 'ok' : 'used')"
         >
           <div class="history-icon">
             <AppIcon :name="h.success ? 'check' : 'x'" :size="14" />
@@ -338,13 +344,17 @@ function formatTime(d) {
   margin-top: 1.5rem;
   text-align: left;
 }
-.result.success {
-  background: rgba(34, 197, 94, 0.08);
-  border: 1px solid rgba(34, 197, 94, 0.3);
+.result.ok, .result.success {
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.45);
 }
-.result.error {
-  background: rgba(248, 113, 113, 0.08);
-  border: 1px solid rgba(248, 113, 113, 0.3);
+.result.used, .result.unpaid, .result.error {
+  background: rgba(220, 38, 38, 0.14);
+  border: 1px solid rgba(248, 113, 113, 0.55);
+}
+.result.wrong {
+  background: rgba(234, 179, 8, 0.16);
+  border: 1px solid rgba(250, 204, 21, 0.55);
 }
 .result-icon {
   width: 44px; height: 44px;
@@ -354,13 +364,17 @@ function formatTime(d) {
   justify-content: center;
   flex-shrink: 0;
 }
-.result.success .result-icon {
+.result.ok .result-icon, .result.success .result-icon {
   background: rgba(34, 197, 94, 0.2);
   color: #22c55e;
 }
-.result.error .result-icon {
+.result.used .result-icon, .result.unpaid .result-icon, .result.error .result-icon {
   background: rgba(248, 113, 113, 0.2);
   color: #f87171;
+}
+.result.wrong .result-icon {
+  background: rgba(234, 179, 8, 0.25);
+  color: #facc15;
 }
 .result-content { flex: 1; text-align: left; }
 .result-title {
@@ -368,8 +382,9 @@ function formatTime(d) {
   font-size: 1rem;
   margin-bottom: 0.35rem;
 }
-.result.success .result-title { color: #22c55e; }
-.result.error .result-title { color: #f87171; }
+.result.ok .result-title, .result.success .result-title { color: #4ade80; }
+.result.used .result-title, .result.unpaid .result-title, .result.error .result-title { color: #f87171; }
+.result.wrong .result-title { color: #facc15; }
 .result-message {
   color: var(--text-secondary);
   font-size: 0.9rem;
@@ -426,8 +441,9 @@ function formatTime(d) {
   background: rgba(255, 255, 255, 0.02);
   border-left: 3px solid;
 }
-.history-item.success { border-color: #22c55e; }
-.history-item.error { border-color: #f87171; }
+.history-item.success, .history-item.ok { border-color: #22c55e; }
+.history-item.error, .history-item.used, .history-item.unpaid { border-color: #f87171; }
+.history-item.wrong { border-color: #facc15; }
 .history-icon {
   width: 28px; height: 28px;
   border-radius: 50%;
