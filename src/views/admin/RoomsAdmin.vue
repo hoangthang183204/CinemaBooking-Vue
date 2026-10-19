@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import AppIcon from '../../components/AppIcon.vue'
 import AdminPager from '../../components/AdminPager.vue'
 import { useToast } from '../../composables/useToast'
@@ -22,6 +22,37 @@ const form = ref({
   rows: 5,
   seatsPerRow: 8,
   coupleRows: 1,
+})
+
+const layoutOpen = ref(false)
+const layoutRoom = ref(null)
+const layoutSeats = ref([])
+const layoutSaving = ref(false)
+
+const layoutRows = computed(() => {
+  const byRow = new Map()
+  for (const s of layoutSeats.value) {
+    const letter = (s.seatNumber || '')[0] || '?'
+    if (!byRow.has(letter)) byRow.set(letter, [])
+    byRow.get(letter).push(s)
+  }
+  return [...byRow.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([letter, seats]) => {
+      const ordered = seats.sort((a, b) => a.seatNumber.localeCompare(b.seatNumber, undefined, { numeric: true }))
+      const items = []
+      for (let i = 0; i < ordered.length; i += 1) {
+        const current = ordered[i]
+        const next = ordered[i + 1]
+        if (current.seatType === 2 && next?.seatType === 2 && !current.isBlocked && !next.isBlocked) {
+          items.push({ kind: 'couple', key: `${current.id}-${next.id}`, seats: [current, next] })
+          i += 1
+        } else {
+          items.push({ kind: 'single', key: String(current.id), seats: [current] })
+        }
+      }
+      return { letter, items }
+    })
 })
 
 async function fetchList() {
@@ -106,6 +137,61 @@ async function remove(room) {
   }
 }
 
+async function openLayout(room) {
+  layoutRoom.value = room
+  layoutOpen.value = true
+  try {
+    const data = await apiFetch(`/api/admin/rooms/${room.id}/seats`)
+    layoutSeats.value = data?.seats ?? []
+  } catch (e) {
+    toast.error(e.message)
+    layoutSeats.value = []
+  }
+}
+
+function cycleOne(seat) {
+  if (seat.isBlocked) {
+    seat.isBlocked = false
+    seat.seatType = 0
+    return
+  }
+  if (seat.seatType === 0) seat.seatType = 1
+  else if (seat.seatType === 1) seat.seatType = 2
+  else {
+    seat.seatType = 0
+    seat.isBlocked = true
+  }
+}
+
+function cycleItem(item) {
+  item.seats.forEach(cycleOne)
+}
+
+function itemClass(item) {
+  if (item.seats.some((seat) => seat.isBlocked)) return 'blocked'
+  if (item.kind === 'couple') return 'couple'
+  if (item.seats[0].seatType === 1) return 'vip'
+  return 'normal'
+}
+
+async function saveLayout() {
+  if (!layoutRoom.value) return
+  layoutSaving.value = true
+  try {
+    const data = await apiFetch(`/api/admin/rooms/${layoutRoom.value.id}/seats`, {
+      method: 'PUT',
+      body: JSON.stringify({ seats: layoutSeats.value }),
+    })
+    layoutSeats.value = data?.seats ?? layoutSeats.value
+    toast.success('Đã lưu sơ đồ ghế')
+    await fetchList()
+  } catch (e) {
+    toast.error(e.message)
+  } finally {
+    layoutSaving.value = false
+  }
+}
+
 onMounted(fetchList)
 </script>
 
@@ -135,6 +221,9 @@ onMounted(fetchList)
             <AppIcon name="room" :size="24" />
           </div>
           <div class="room-actions">
+            <button class="btn-icon" @click="openLayout(r)" title="Sơ đồ ghế">
+              <AppIcon name="eye" :size="14" />
+            </button>
             <button class="btn-icon" @click="openEdit(r)" title="Sửa">
               <AppIcon name="edit" :size="14" />
             </button>
@@ -144,6 +233,7 @@ onMounted(fetchList)
           </div>
         </div>
         <h3 class="room-name">{{ r.name }}</h3>
+        <button class="map-link" type="button" @click="openLayout(r)">Xem sơ đồ ghế</button>
         <div class="room-stats">
           <div class="stat">
             <span class="stat-label">Số ghế</span>
@@ -157,6 +247,60 @@ onMounted(fetchList)
       </div>
     </div>
     <AdminPager v-if="!loading && !error" v-model:page="page" :page-count="pageCount" :total="total" />
+
+    <div v-if="layoutOpen" class="modal-backdrop" @click.self="layoutOpen = false">
+      <div class="modal map-modal">
+        <div class="modal-head">
+          <h3>Sơ đồ ghế · {{ layoutRoom?.name }}</h3>
+          <button class="modal-close" @click="layoutOpen = false">
+            <AppIcon name="x" :size="18" />
+          </button>
+        </div>
+        <div class="modal-body">
+          <p class="hint">Bấm từng ghế để đổi: thường → VIP → đôi → khóa. Ghế đôi hiện thành một cặp như lúc khách đặt vé.</p>
+          <div class="seat-map-wrap">
+            <div class="legend">
+              <span class="legend-item"><i class="dot normal" /> Thường</span>
+              <span class="legend-item"><i class="dot vip" /> VIP</span>
+              <span class="legend-item"><i class="dot couple" /> Ghế đôi</span>
+              <span class="legend-item"><i class="dot blocked" /> Khóa</span>
+            </div>
+            <div class="screen-wrap">
+              <div class="screen-curve" />
+              <span class="screen-label">MÀN HÌNH</span>
+            </div>
+            <div class="rows">
+              <div v-for="row in layoutRows" :key="row.letter" class="row">
+                <span class="row-label">{{ row.letter }}</span>
+                <div class="seats-in-row">
+                  <button
+                    v-for="item in row.items"
+                    :key="item.key"
+                    type="button"
+                    class="seat"
+                    :class="itemClass(item)"
+                    @click="cycleItem(item)"
+                  >
+                    <span v-if="item.kind === 'couple'" class="couple-seats">
+                      <span class="couple-icon">♡</span>
+                      <span>{{ item.seats[0].seatNumber }}–{{ item.seats[1].seatNumber }}</span>
+                    </span>
+                    <span v-else>{{ item.seats[0].seatNumber }}</span>
+                  </button>
+                </div>
+                <span class="row-label">{{ row.letter }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button class="btn btn-secondary" @click="layoutOpen = false">Đóng</button>
+          <button class="btn btn-primary" :disabled="layoutSaving" @click="saveLayout">
+            {{ layoutSaving ? 'Đang lưu...' : 'Lưu sơ đồ' }}
+          </button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="showModal" class="modal-backdrop" @click.self="closeModal">
       <div class="modal">
@@ -456,4 +600,54 @@ onMounted(fetchList)
   justify-content: flex-end;
   gap: 0.75rem;
 }
+.map-link {
+  align-self: start;
+  background: transparent;
+  border: none;
+  color: #fca5a5;
+  cursor: pointer;
+  padding: 0;
+  font-family: inherit;
+  font-weight: 600;
+}
+.map-modal { max-width: 860px; }
+.seat-map-wrap { display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+.legend { display: flex; gap: 1.1rem; flex-wrap: wrap; justify-content: center; color: var(--text-muted); font-size: 0.82rem; }
+.legend-item { display: flex; align-items: center; gap: 0.4rem; }
+.dot { width: 14px; height: 14px; border-radius: 4px; }
+.dot.normal { background: #334155; }
+.dot.vip { background: #ca8a04; }
+.dot.couple { width: 22px; background: #a855f7; border-radius: 4px 4px 2px 2px; }
+.dot.blocked { background: #7f1d1d; }
+.screen-wrap { width: 90%; max-width: 480px; text-align: center; }
+.screen-curve {
+  height: 24px;
+  background: linear-gradient(to bottom, rgba(229, 9, 20, 0.4), transparent);
+  border-top: 3px solid #e50914;
+  border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+  box-shadow: 0 -8px 32px rgba(229, 9, 20, 0.35);
+}
+.screen-label {
+  display: block; margin-top: 0.45rem; font-size: 0.75rem; letter-spacing: 0.4em; color: var(--text-muted); font-weight: 600;
+}
+.rows { display: flex; flex-direction: column; gap: 0.6rem; overflow-x: auto; max-width: 100%; padding: 0.25rem; }
+.row { display: flex; align-items: center; justify-content: center; gap: 0.75rem; }
+.row-label { width: 20px; text-align: center; font-weight: 700; color: var(--text-muted); font-size: 0.85rem; }
+.seats-in-row { display: flex; gap: 0.35rem; }
+.seat {
+  border: none; color: #fff; font-weight: 700; cursor: pointer; font-family: inherit; position: relative;
+  transition: transform 0.15s ease;
+}
+.seat.normal, .seat.vip, .seat.blocked {
+  width: 38px; height: 38px; border-radius: 8px 8px 4px 4px; font-size: 0.68rem;
+}
+.seat.normal { background: #334155; }
+.seat.vip { background: #ca8a04; }
+.seat.blocked { background: #7f1d1d; opacity: 0.55; }
+.seat.couple {
+  width: 86px; height: 44px; border-radius: 10px 10px 6px 6px; background: #a855f7; padding: 0;
+}
+.seat:hover { transform: translateY(-2px); }
+.couple-seats { display: flex; align-items: center; justify-content: center; gap: 0.3rem; font-size: 0.68rem; }
+.couple-icon { color: #fde68a; }
 </style>
