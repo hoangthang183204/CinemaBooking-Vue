@@ -38,13 +38,24 @@ const concessionQty = ref({})
 const createdBooking = ref(null)
 const creating = ref(false)
 const confirming = ref(false)
+const payMethod = ref('cash')
+const cashReceived = ref(0)
 
 const selectedMovie = computed(() =>
   movies.value.find((m) => m.id === selectedMovieId.value)
 )
 
-const movieShowtimes = computed(() =>
+function isUpcoming(start) {
+  const time = new Date(start).getTime()
+  return !Number.isNaN(time) && time > Date.now()
+}
+
+const movieAllShowtimes = computed(() =>
   showtimes.value.filter((s) => s.movieId === selectedMovieId.value)
+)
+
+const movieShowtimes = computed(() =>
+  movieAllShowtimes.value.filter((s) => isUpcoming(s.startTime))
 )
 
 const selectedShowtime = computed(() =>
@@ -59,6 +70,10 @@ const snackTotal = computed(() =>
   concessions.value.reduce((sum, item) => sum + item.price * (concessionQty.value[item.id] || 0), 0)
 )
 const totalPrice = computed(() => selectedSeatObjects.value.length * 75000 + snackTotal.value)
+const changeAmount = computed(() => {
+  const due = Number(createdBooking.value?.totalPrice || 0)
+  return Math.max(0, Number(cashReceived.value || 0) - due)
+})
 
 function changeQty(id, delta) {
   const item = concessions.value.find((row) => row.id === id)
@@ -208,6 +223,7 @@ function reset() {
   note.value = ''
   concessionQty.value = {}
   createdBooking.value = null
+  cashReceived.value = 0
 }
 
 async function createBooking() {
@@ -242,19 +258,32 @@ async function createBooking() {
   }
 }
 
-async function confirmPayment() {
+async function confirmPayment(method) {
   if (!createdBooking.value) return
+  const due = Number(createdBooking.value.totalPrice || 0)
+  if (method === 'cash' && Number(cashReceived.value || 0) < due) {
+    toast.warning('Số tiền khách đưa chưa đủ.')
+    return
+  }
 
   confirming.value = true
+  payMethod.value = method
   try {
     const result = await apiFetch(
       `/api/staff/bookings/${createdBooking.value.bookingId}/confirm-payment`,
       {
         method: 'POST',
-        body: JSON.stringify({ note: note.value || null }),
+        body: JSON.stringify({
+          note: note.value || null,
+          method,
+          cashReceived: method === 'cash' ? Number(cashReceived.value || 0) : null,
+        }),
       }
     )
-    toast.success('Đã xác nhận thanh toán! In vé cho khách.')
+    const change = Number(result?.changeAmount || 0)
+    toast.success(method === 'cash' && change > 0
+      ? `Đã thu tiền mặt. Tiền thối ${change.toLocaleString('vi-VN')}₫`
+      : 'Đã xác nhận thanh toán! In vé cho khách.')
     createdBooking.value = { ...createdBooking.value, tickets: result.tickets, status: 'Paid' }
   } catch (e) {
     toast.error('Lỗi: ' + e.message)
@@ -333,7 +362,7 @@ onUnmounted(stopPaidWatch)
           <span class="step-num">2</span> Chọn suất chiếu
         </h3>
         <div v-if="movieShowtimes.length === 0" class="empty">
-          Phim này chưa có suất chiếu
+          {{ movieAllShowtimes.length ? 'Suất đã qua giờ chiếu, không đặt được vé.' : 'Phim này chưa có suất chiếu' }}
         </div>
         <div v-else class="showtime-grid">
           <button
@@ -360,7 +389,7 @@ onUnmounted(stopPaidWatch)
         <div class="legend">
           <span><i class="dot available" /> Trống</span>
           <span><i class="dot selected" /> Đang chọn</span>
-          <span><i class="dot booked" /> Đã đặt</span>
+          <span><i class="dot booked" /> Đã bán</span>
           <span><i class="dot couple" /> Ghế đôi</span>
         </div>
 
@@ -495,7 +524,7 @@ onUnmounted(stopPaidWatch)
             <span class="badge-success">Đã tạo đơn</span>
             #{{ createdBooking.bookingId }}
           </h2>
-          <p class="page-sub">Khách quét QR tài khoản. Nội dung bắt buộc là VE {{ createdBooking.bookingId }}. Tiền vào đúng số tiền thì đơn tự xác nhận.</p>
+          <p class="page-sub">Hóa đơn bên trái, thu tiền bên phải.</p>
         </div>
         <button v-if="!createdBooking.tickets" class="btn btn-secondary" @click="reset">
           <AppIcon name="plus" :size="18" />
@@ -504,8 +533,7 @@ onUnmounted(stopPaidWatch)
       </div>
 
       <div class="payment-layout">
-        <!-- Left: QR thanh toán -->
-        <div v-if="!createdBooking.tickets" class="qr-card">
+        <div v-if="!createdBooking.tickets" class="bill-col">
           <div class="print-sheet">
           <PaymentBill
             :code="createdBooking.bookingId"
@@ -521,26 +549,33 @@ onUnmounted(stopPaidWatch)
             channel="counter"
           />
           </div>
-
+        </div>
+        <aside v-if="!createdBooking.tickets" class="pay-panel">
+          <p class="pay-kicker">Khách cần trả</p>
+          <p class="pay-due">{{ Number(createdBooking.totalPrice || 0).toLocaleString('vi-VN') }}₫</p>
+          <p class="pay-note">Nội dung chuyển khoản <strong>VE {{ createdBooking.bookingId }}</strong>. Đúng số tiền thì đơn tự xác nhận.</p>
+          <label class="tender">
+            <span>Khách đưa tiền mặt</span>
+            <input v-model.number="cashReceived" type="number" min="0" step="1000" />
+          </label>
+          <div class="change-box">
+            <span>Tiền thối</span>
+            <strong>{{ changeAmount.toLocaleString('vi-VN') }}₫</strong>
+          </div>
           <div class="payment-actions">
+            <button class="btn btn-primary" :disabled="confirming" @click="confirmPayment('cash')">
+              <AppIcon name="check" :size="18" />
+              <span>{{ confirming && payMethod === 'cash' ? 'Đang xử lý...' : 'Thu tiền mặt' }}</span>
+            </button>
+            <button class="btn btn-secondary" :disabled="confirming" @click="confirmPayment('transfer')">
+              <span>{{ confirming && payMethod === 'transfer' ? 'Đang xử lý...' : 'Đã nhận chuyển khoản' }}</span>
+            </button>
             <button type="button" class="btn btn-secondary" @click="printBill">
               <AppIcon name="printer" :size="18" />
               <span>In hóa đơn</span>
             </button>
-            <a :href="createdBooking.paymentUrl" target="_blank" class="btn btn-secondary">
-              <AppIcon name="eye" :size="18" />
-              <span>Mở trang thanh toán</span>
-            </a>
-            <button
-              class="btn btn-primary"
-              :disabled="confirming"
-              @click="confirmPayment"
-            >
-              <AppIcon name="check" :size="18" />
-              <span>{{ confirming ? 'Đang xử lý...' : 'Xác nhận đã TT' }}</span>
-            </button>
           </div>
-        </div>
+        </aside>
 
         <!-- Right: In vé -->
         <div v-else class="tickets-card">
@@ -780,9 +815,9 @@ onUnmounted(stopPaidWatch)
 }
 .legend span { display: inline-flex; align-items: center; gap: 0.4rem; }
 .dot { width: 14px; height: 14px; border-radius: 4px; display: inline-block; }
-.dot.available { background: var(--seat-available); }
-.dot.selected { background: var(--seat-selected); }
-.dot.booked { background: var(--seat-booked); }
+.dot.available { background: #16a34a; }
+.dot.selected { background: #eab308; }
+.dot.booked { background: #dc2626; }
 .dot.couple { width: 22px; background: var(--seat-couple); border-radius: 4px 4px 2px 2px; }
 
 /* Screen */
@@ -847,8 +882,8 @@ onUnmounted(stopPaidWatch)
   border-radius: 0 0 3px 3px;
   background: rgba(0, 0, 0, 0.4);
 }
-.seat.normal.available { background: var(--seat-available); }
-.seat.normal.available:hover { background: var(--seat-available-hover); transform: translateY(-2px); }
+.seat.normal.available { background: #15803d; }
+.seat.normal.available:hover { background: #16a34a; transform: translateY(-2px); }
 .seat.couple {
   width: 86px;
   height: 44px;
@@ -872,15 +907,30 @@ onUnmounted(stopPaidWatch)
 .couple-seats { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.68rem; font-weight: 700; }
 .couple-icon { color: #fde68a; }
 .seat.booked {
-  background: var(--seat-booked) !important;
-  opacity: 0.55;
+  background: #dc2626 !important;
+  opacity: 1;
   cursor: not-allowed;
 }
 .seat.selected {
-  background: var(--seat-selected) !important;
+  background: #eab308 !important;
+  color: #111;
   transform: translateY(-2px);
-  box-shadow: 0 0 18px rgba(229, 9, 20, 0.65);
+  box-shadow: 0 0 18px rgba(234, 179, 8, 0.55);
 }
+.tender {
+  display: grid;
+  gap: 0.35rem;
+  text-align: left;
+}
+.tender input {
+  padding: 0.75rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: #0b0b0b;
+  color: #fff;
+  font: inherit;
+}
+.tender p { margin: 0; color: #fde68a; font-weight: 700; }
 
 /* Form */
 .form-grid {
@@ -989,9 +1039,28 @@ onUnmounted(stopPaidWatch)
 /* QR Card */
 .payment-layout {
   display: grid;
-  grid-template-columns: 400px 1fr;
-  gap: 1.5rem;
+  grid-template-columns: minmax(320px, 440px) minmax(280px, 1fr);
+  gap: 1.25rem;
+  align-items: start;
 }
+.bill-col { display: flex; justify-content: center; }
+.pay-panel {
+  background: #141414;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  padding: 1.25rem;
+  display: grid;
+  gap: 0.85rem;
+}
+.pay-kicker { margin: 0; color: var(--text-muted); font-size: 0.85rem; letter-spacing: 0.04em; }
+.pay-due { margin: 0; font-size: 2.4rem; font-weight: 800; color: #fde68a; letter-spacing: -0.03em; }
+.pay-note { margin: 0; color: var(--text-secondary); line-height: 1.45; }
+.change-box {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 0.9rem 1rem; border-radius: 12px; background: rgba(234, 179, 8, 0.12);
+}
+.change-box span { color: #fde68a; }
+.change-box strong { font-size: 1.45rem; color: #fff; }
 @media (max-width: 900px) {
   .payment-layout { grid-template-columns: 1fr; }
 }
