@@ -2,12 +2,15 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiFetch } from '../api'
+import AdminPager from '../components/AdminPager.vue'
+import { usePager } from '../composables/usePager'
 import { useToast } from '../composables/useToast'
 
 const router = useRouter()
 const toast = useToast()
 
 const list = ref([])
+const { page, pageCount, total, items: pageItems } = usePager(list)
 const loading = ref(true)
 const error = ref('')
 const selected = ref(null)
@@ -120,6 +123,31 @@ async function cancelBooking(booking) {
   }
 }
 
+function money(value) {
+  return Number(value || 0).toLocaleString('vi-VN')
+}
+
+function snackOf(booking) {
+  if (Number(booking?.snackSubtotal) > 0) return Number(booking.snackSubtotal)
+  return (booking?.concessions || []).reduce(
+    (sum, item) => sum + Number(item.unitPrice || 0) * Number(item.quantity || 0),
+    0
+  )
+}
+
+function ticketOf(booking) {
+  if (Number(booking?.ticketSubtotal) > 0) return Number(booking.ticketSubtotal)
+  const seats = (booking?.seatNumbers || []).length
+  return seats * 75000
+}
+
+function discountOf(booking) {
+  const stored = Number(booking?.discountAmount) || 0
+  if (stored > 0) return stored
+  const gap = ticketOf(booking) + snackOf(booking) + Number(booking?.surchargeAmount || 0) - Number(booking?.totalPrice || 0)
+  return gap > 0 ? gap : 0
+}
+
 function formatDateTime(d) {
   if (!d) return '—'
   return new Date(d).toLocaleString('vi-VN')
@@ -146,7 +174,7 @@ function formatDateTime(d) {
 
       <div v-else class="tickets-list">
         <article
-          v-for="b in list"
+          v-for="b in pageItems"
           :key="b.id"
           class="ticket-card"
           :class="[String(b.status || '').toLowerCase(), { active: selected?.id === b.id }]"
@@ -194,8 +222,24 @@ function formatDateTime(d) {
                 <span class="value">{{ selected.concessions.map((c) => `${c.name} × ${c.quantity}`).join(', ') }}</span>
               </div>
               <div class="info-row">
-                <span class="label">Tổng tiền</span>
-                <span class="value total">{{ Number(selected.totalPrice || 0).toLocaleString('vi-VN') }}₫</span>
+                <span class="label">Tiền ghế</span>
+                <span class="value">{{ money(ticketOf(selected)) }}₫</span>
+              </div>
+              <div class="info-row">
+                <span class="label">Bắp nước</span>
+                <span class="value">{{ money(snackOf(selected)) }}₫</span>
+              </div>
+              <div v-if="Number(selected.surchargeAmount) > 0" class="info-row">
+                <span class="label">Phụ thu</span>
+                <span class="value">{{ money(selected.surchargeAmount) }}₫</span>
+              </div>
+              <div class="info-row">
+                <span class="label">Voucher {{ selected.promoCode || (discountOf(selected) > 0 ? 'đã áp dụng' : 'không dùng') }}</span>
+                <span class="value">-{{ money(discountOf(selected)) }}₫</span>
+              </div>
+              <div class="info-row">
+                <span class="label">Tổng thanh toán</span>
+                <span class="value total">{{ money(selected.totalPrice) }}₫</span>
               </div>
             </div>
 
@@ -230,6 +274,7 @@ function formatDateTime(d) {
           </div>
         </article>
       </div>
+      <AdminPager v-if="list.length" v-model:page="page" :page-count="pageCount" :total="total" />
     </template>
   </div>
 </template>
