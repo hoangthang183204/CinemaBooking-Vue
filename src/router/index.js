@@ -82,9 +82,19 @@ const routes = [
         component: () => import('../views/admin/UsersAdmin.vue'),
       },
       {
+        path: 'staff',
+        name: 'AdminStaff',
+        component: () => import('../views/admin/StaffAdmin.vue'),
+      },
+      {
         path: 'bookings',
         name: 'AdminBookings',
         component: () => import('../views/admin/BookingsAdmin.vue'),
+      },
+      {
+        path: 'shifts',
+        name: 'AdminShifts',
+        component: () => import('../views/admin/ShiftsAdmin.vue'),
       },
       {
         path: 'home',
@@ -100,6 +110,21 @@ const routes = [
         path: 'pages',
         name: 'AdminSitePages',
         component: () => import('../views/admin/SitePagesAdmin.vue'),
+      },
+      {
+        path: 'promotions',
+        name: 'AdminPromotions',
+        component: () => import('../views/admin/PromotionsAdmin.vue'),
+      },
+      {
+        path: 'reports',
+        name: 'AdminReports',
+        component: () => import('../views/admin/ReportsAdmin.vue'),
+      },
+      {
+        path: 'settings',
+        name: 'AdminSettings',
+        component: () => import('../views/admin/SettingsAdmin.vue'),
       },
     ],
   },
