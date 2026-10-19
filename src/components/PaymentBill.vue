@@ -8,6 +8,11 @@ const props = defineProps({
   showTime: { type: String, default: '' },
   seats: { type: Array, default: () => [] },
   concessions: { type: Array, default: () => [] },
+  ticketSubtotal: { type: Number, default: 0 },
+  snackSubtotal: { type: Number, default: 0 },
+  surcharge: { type: Number, default: 0 },
+  discount: { type: Number, default: 0 },
+  promoCode: { type: String, default: '' },
   total: { type: Number, default: 0 },
   qrUrl: { type: String, default: '' },
   tickets: { type: Array, default: () => [] },
@@ -16,12 +21,33 @@ const props = defineProps({
   accountNumber: { type: String, default: '' },
 })
 
-const seatLines = computed(() =>
-  (props.seats || []).map((seat) => ({
+const snackFromLines = computed(() =>
+  (props.concessions || []).reduce(
+    (sum, item) => sum + Number(item.unitPrice || 0) * Number(item.quantity || 0),
+    0
+  )
+)
+
+const ticketFromLines = computed(() => {
+  const seats = props.seats || []
+  if (Number(props.ticketSubtotal) > 0) return Number(props.ticketSubtotal)
+  const leftover = Number(props.total || 0) + Number(props.discount || 0) - Number(props.surcharge || 0) - snackFromLines.value
+  if (leftover > 0) return leftover
+  return seats.length * 75000
+})
+
+const seatLines = computed(() => {
+  const seats = props.seats || []
+  const each = seats.length ? ticketFromLines.value / seats.length : 0
+  return seats.map((seat) => ({
     name: `Vé ghế ${seat}`,
     qty: 1,
-    price: 75000,
+    price: each,
   }))
+})
+
+const shownSnack = computed(() =>
+  Number(props.snackSubtotal) > 0 ? Number(props.snackSubtotal) : snackFromLines.value
 )
 
 function money(value) {
@@ -65,7 +91,13 @@ function money(value) {
       </tbody>
     </table>
 
-    <p class="total">Tổng {{ money(total) }}</p>
+    <div v-if="surcharge > 0 || discount > 0" class="adjust">
+      <p><span>Tiền ghế</span><span>{{ money(ticketFromLines) }}</span></p>
+      <p><span>Bắp nước</span><span>{{ money(shownSnack) }}</span></p>
+      <p v-if="surcharge > 0"><span>Phụ thu</span><span>{{ money(surcharge) }}</span></p>
+      <p v-if="discount > 0"><span>Voucher {{ promoCode || 'đã áp dụng' }}</span><span>-{{ money(discount) }}</span></p>
+    </div>
+    <p class="total">Tổng thanh toán {{ money(total) }}</p>
 
     <template v-if="qrUrl && !tickets.length">
       <img :src="qrUrl" alt="QR chuyển khoản" />
@@ -120,6 +152,10 @@ dd { margin: 0; text-align: right; font-weight: 600; }
 table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
 th, td { text-align: left; padding: 0.4rem 0; border-bottom: 1px solid #eee; }
 th:last-child, td:last-child { text-align: right; }
+.adjust { margin-top: 0.6rem; }
+.adjust p {
+  display: flex; justify-content: space-between; margin: 0.2rem 0; font-size: 0.88rem;
+}
 .total {
   margin: 0.8rem 0;
   text-align: right;
