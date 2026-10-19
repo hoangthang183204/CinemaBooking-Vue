@@ -28,6 +28,34 @@ const methods = computed(() => allMethods.filter((item) => item.id !== 'vnpay' |
 const selectedMethod = ref('counter')
 const billOpen = ref(false)
 const onlineUrl = ref('')
+const seatPrice = ref(75000)
+
+const bill = computed(() => {
+  const current = booking.value || {}
+  const snackFromLines = (current.concessions || []).reduce(
+    (sum, item) => sum + Number(item.unitPrice || 0) * Number(item.quantity || 0),
+    0
+  )
+  const seats = (current.seatNumbers || []).length
+  const snack = Number(current.snackSubtotal) > 0 ? Number(current.snackSubtotal) : snackFromLines
+  const ticket = Number(current.ticketSubtotal) > 0
+    ? Number(current.ticketSubtotal)
+    : seats * seatPrice.value
+  const surcharge = Number(current.surchargeAmount) || 0
+  let discount = Number(current.discountAmount) || 0
+  if (!discount) {
+    const gap = ticket + snack + surcharge - Number(current.totalPrice || 0)
+    if (gap > 0) discount = gap
+  }
+  return {
+    ticket,
+    snack,
+    surcharge,
+    discount,
+    code: current.promoCode || '',
+    total: Number(current.totalPrice || 0),
+  }
+})
 
 function getToken() {
   return localStorage.getItem('cb_token')
@@ -48,11 +76,13 @@ onMounted(async () => {
   }
 
   try {
-    const [detail, options] = await Promise.all([
+    const [detail, options, settings] = await Promise.all([
       apiFetch(`/api/bookings/${props.bookingId}`),
       apiFetch('/api/payment/methods').catch(() => ({ vnpay: false })),
+      apiFetch('/api/settings/public').catch(() => null),
     ])
     booking.value = detail
+    if (settings?.seatPrice) seatPrice.value = Number(settings.seatPrice)
     vnpayReady.value = !!options?.vnpay
     if (!vnpayReady.value && selectedMethod.value === 'vnpay') selectedMethod.value = 'counter'
   } catch (e) {
@@ -137,6 +167,10 @@ function statusLabel(status) {
   return status
 }
 
+function money(value) {
+  return `${Number(value || 0).toLocaleString('vi-VN')}₫`
+}
+
 function formatDateTime(d) {
   if (!d) return '—'
   return new Date(d).toLocaleString('vi-VN')
@@ -190,11 +224,27 @@ function formatDateTime(d) {
             </span>
           </div>
         </div>
+        <div class="money-lines">
+          <div class="money-line">
+            <span>Tiền ghế</span>
+            <span>{{ money(bill.ticket) }}</span>
+          </div>
+          <div class="money-line">
+            <span>Bắp nước</span>
+            <span>{{ money(bill.snack) }}</span>
+          </div>
+          <div v-if="bill.surcharge > 0" class="money-line">
+            <span>Phụ thu</span>
+            <span>{{ money(bill.surcharge) }}</span>
+          </div>
+          <div class="money-line voucher">
+            <span>Voucher {{ bill.code || (bill.discount > 0 ? 'đã áp dụng' : 'không dùng') }}</span>
+            <span>-{{ money(bill.discount) }}</span>
+          </div>
+        </div>
         <div class="total-row">
           <span>Tổng thanh toán</span>
-          <span class="total-amount">
-            {{ Number(booking.totalPrice || 0).toLocaleString('vi-VN') }}₫
-          </span>
+          <span class="total-amount">{{ money(bill.total) }}</span>
         </div>
       </div>
 
@@ -237,8 +287,8 @@ function formatDateTime(d) {
               paying
                 ? 'Đang chuyển sang cổng thanh toán...'
                 : selectedMethod === 'vnpay'
-                  ? `Thanh toán VNPay ${Number(booking.totalPrice || 0).toLocaleString('vi-VN')}₫`
-                  : `Thanh toán ${Number(booking.totalPrice || 0).toLocaleString('vi-VN')}₫`
+                  ? `Thanh toán VNPay ${money(bill.total)}`
+                  : `Thanh toán ${money(bill.total)}`
             }}
           </button>
         </div>
@@ -252,7 +302,12 @@ function formatDateTime(d) {
           :show-time="formatDateTime(booking.showTimeStart)"
           :seats="booking.seatNumbers || []"
           :concessions="booking.concessions || []"
-          :total="Number(booking.totalPrice || 0)"
+          :ticket-subtotal="bill.ticket"
+          :snack-subtotal="bill.snack"
+          :surcharge="bill.surcharge"
+          :discount="bill.discount"
+          :promo-code="bill.code"
+          :total="bill.total"
           :qr-url="paymentQrUrl(booking.id, booking.totalPrice)"
           :channel="selectedMethod === 'counter' ? 'counter' : 'web'"
         />
@@ -368,6 +423,9 @@ function formatDateTime(d) {
   text-align: right;
 }
 
+.money-lines { display: grid; gap: 0.45rem; padding-top: 0.9rem; }
+.money-line { display: flex; justify-content: space-between; color: var(--text-secondary); font-size: 0.9rem; }
+.money-line.voucher { color: #86efac; }
 .total-row {
   display: flex;
   justify-content: space-between;
