@@ -28,7 +28,9 @@ const filtered = computed(() => {
   return arr.filter(
     (b) =>
       b.movieTitle.toLowerCase().includes(q) ||
-      b.userEmail.toLowerCase().includes(q) ||
+      (b.userEmail || '').toLowerCase().includes(q) ||
+      (b.customerPhone || '').includes(search.value.trim()) ||
+      (b.customerName || '').toLowerCase().includes(q) ||
       String(b.id).includes(q)
   )
 })
@@ -95,6 +97,24 @@ function formatMoney(n) {
   return Number(n || 0).toLocaleString('vi-VN') + '₫'
 }
 
+function realName(booking) {
+  const name = (booking?.customerName || '').trim()
+  const email = (booking?.userEmail || '').trim()
+  if (!name || name.toLowerCase() === email.toLowerCase()) return ''
+  return name
+}
+
+function customerTitle(booking) {
+  return realName(booking) || booking?.userEmail || 'Khách tại quầy'
+}
+
+function customerSub(booking) {
+  const phone = (booking?.customerPhone || '').trim()
+  if (phone) return phone
+  if (realName(booking)) return booking.userEmail || ''
+  return ''
+}
+
 function statusLabel(s, full = false) {
   const map = full
     ? { Paid: 'Đã thanh toán', Pending: 'Chờ thanh toán', Cancelled: 'Đã hủy', Refunded: 'Chờ hoàn tiền', RefundCompleted: 'Đã hoàn tiền' }
@@ -103,6 +123,71 @@ function statusLabel(s, full = false) {
 }
 
 const refunding = ref(false)
+const exchangeOpen = ref(false)
+const exchangeShows = ref([])
+const exchangeShowId = ref(null)
+const exchangeSeats = ref([])
+const exchangeSelected = ref(new Set())
+const exchanging = ref(false)
+
+async function startExchange() {
+  exchangeOpen.value = true
+  exchangeShowId.value = null
+  exchangeSeats.value = []
+  exchangeSelected.value = new Set()
+  try {
+    const all = await apiFetch('/api/showtimes')
+    const movieId = detail.value?.movieId
+    const title = detail.value?.movieTitle
+    exchangeShows.value = (all || []).filter((st) => {
+      const sameMovie = movieId ? st.movieId === movieId : st.movieTitle === title
+      return sameMovie && new Date(st.startTime).getTime() > Date.now()
+    })
+  } catch (e) {
+    toast.error(e.message || 'Không tải được suất chiếu')
+  }
+}
+
+async function loadExchangeSeats(id) {
+  exchangeShowId.value = id
+  exchangeSelected.value = new Set()
+  try {
+    const data = await apiFetch(`/api/showtimes/${id}/room-seats`)
+    exchangeSeats.value = data?.seats || []
+  } catch (e) {
+    toast.error(e.message || 'Không tải được ghế')
+  }
+}
+
+function toggleExchangeSeat(seat) {
+  if (seat.isBooked) return
+  const next = new Set(exchangeSelected.value)
+  if (next.has(seat.seatId)) next.delete(seat.seatId)
+  else next.add(seat.seatId)
+  exchangeSelected.value = next
+}
+
+async function submitExchange() {
+  if (!detail.value) return
+  exchanging.value = true
+  try {
+    const result = await apiFetch(`/api/staff/bookings/${detail.value.id}/exchange`, {
+      method: 'POST',
+      body: JSON.stringify({
+        showtimeId: exchangeShowId.value,
+        seatIds: [...exchangeSelected.value],
+      }),
+    })
+    toast.success(result?.message || 'Đã đổi vé')
+    detail.value = await apiFetch(`/api/staff/bookings/${detail.value.id}`)
+    exchangeOpen.value = false
+    await fetchList()
+  } catch (e) {
+    toast.error(e.message || 'Không đổi được vé')
+  } finally {
+    exchanging.value = false
+  }
+}
 
 async function completeRefund(b) {
   const money = formatMoney(b.totalPrice)
@@ -136,6 +221,7 @@ function printBill() {
 }
 
 async function openDetail(booking) {
+  exchangeOpen.value = false
   detail.value = {
     ...booking,
     concessions: booking.concessions || [],
@@ -170,7 +256,7 @@ onMounted(fetchList)
           v-model="search"
           type="text"
           class="search-input"
-          placeholder="Tìm theo mã đơn, phim, email..."
+          placeholder="Mã đơn, số điện thoại hoặc email"
         />
       </div>
 
@@ -224,7 +310,8 @@ onMounted(fetchList)
           <tr v-for="b in pageItems" :key="b.id" class="row-link" @click="openDetail(b)">
             <td class="cell-id">#{{ b.id }}</td>
             <td>
-              <div class="email-cell">{{ b.userEmail }}</div>
+              <div class="email-cell">{{ customerTitle(b) }}</div>
+              <div v-if="customerSub(b)" class="cell-sub">{{ customerSub(b) }}</div>
             </td>
             <td>
               <div class="cell-title">{{ b.movieTitle }}</div>
@@ -300,7 +387,15 @@ onMounted(fetchList)
           <dl class="detail-grid">
             <div>
               <dt>Khách hàng</dt>
-              <dd>{{ detail.userEmail || 'Guest' }}</dd>
+              <dd>{{ realName(detail) || 'Khách tại quầy' }}</dd>
+            </div>
+            <div>
+              <dt>Điện thoại</dt>
+              <dd>{{ detail.customerPhone || '—' }}</dd>
+            </div>
+            <div>
+              <dt>Email</dt>
+              <dd>{{ detail.userEmail || '—' }}</dd>
             </div>
             <div>
               <dt>Đặt lúc</dt>
@@ -365,7 +460,64 @@ onMounted(fetchList)
               />
             </div>
             <div class="modal-foot">
-              <button type="button" class="print-btn" @click="printBill">In hóa đơn</button>
+              <button type="button" class="print-btn" @click="printBill">In lại vé</button>
+              <button
+                v-if="detail.status === 'Pending' || detail.status === 'Paid'"
+                type="button"
+                class="print-btn alt"
+                @click="startExchange"
+              >
+                Đổi vé
+              </button>
+              <button
+                v-if="detail.status === 'Paid'"
+                type="button"
+                class="print-btn danger"
+                @click="cancelBooking(detail)"
+              >
+                Hủy vé
+              </button>
+              <button
+                v-if="detail.status === 'Pending'"
+                type="button"
+                class="print-btn danger"
+                @click="cancelBooking(detail)"
+              >
+                Hủy đơn
+              </button>
+            </div>
+            <div v-if="exchangeOpen" class="exchange">
+              <h4>Đổi suất hoặc ghế</h4>
+              <div class="show-picks">
+                <button
+                  v-for="st in exchangeShows"
+                  :key="st.id"
+                  type="button"
+                  :class="{ on: exchangeShowId === st.id }"
+                  @click="loadExchangeSeats(st.id)"
+                >
+                  {{ new Date(st.startTime).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) }}
+                  · {{ st.roomName }}
+                </button>
+              </div>
+              <div v-if="exchangeSeats.length" class="seat-picks">
+                <button
+                  v-for="seat in exchangeSeats"
+                  :key="seat.seatId"
+                  type="button"
+                  :disabled="seat.isBooked"
+                  :class="{
+                    sold: seat.isBooked,
+                    on: exchangeSelected.has(seat.seatId),
+                  }"
+                  @click="toggleExchangeSeat(seat)"
+                >
+                  {{ seat.seatNumber }}
+                </button>
+              </div>
+              <button type="button" class="print-btn" :disabled="exchanging || !exchangeSelected.size" @click="submitExchange">
+                {{ exchanging ? 'Đang đổi...' : 'Xác nhận đổi vé' }}
+              </button>
             </div>
           </template>
         </section>
@@ -589,6 +741,18 @@ onMounted(fetchList)
 }
 .refund-box p { margin: 0 0 0.75rem; }
 .refund-done { margin: 1rem 0 0; color: #86efac; font-weight: 700; }
+.modal-foot { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.print-btn.alt { background: #1d4ed8; }
+.print-btn.danger { background: #b91c1c; }
+.exchange { display: grid; gap: 0.6rem; margin-top: 0.8rem; }
+.exchange h4 { margin: 0; }
+.show-picks, .seat-picks { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.show-picks button, .seat-picks button {
+  border: 1px solid rgba(255,255,255,0.14); background: #15803d; color: #fff;
+  border-radius: 8px; padding: 0.4rem 0.55rem; cursor: pointer; font-family: inherit;
+}
+.show-picks button.on, .seat-picks button.on { background: #eab308; color: #111; }
+.seat-picks button.sold { background: #dc2626; cursor: not-allowed; }
 
 .actions { display: flex; gap: 0.4rem; }
 .btn-icon {
