@@ -1,23 +1,100 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import AppIcon from '../../components/AppIcon.vue'
 import { apiFetch } from '../../api'
 
+const dayOptions = [7, 14, 20, 30, 60]
+const thisYear = new Date().getFullYear()
+const days = ref(14)
+const year = ref(null)
+const from = ref(isoDate(addDays(new Date(), -14)))
+const to = ref(isoDate(new Date()))
+const chartTitle = computed(() => {
+  if (year.value) return `Năm ${year.value}`
+  if (days.value) return `Từ ${days.value} ngày trước`
+  return `${showDate(from.value)} – ${showDate(to.value)}`
+})
+const isWideChart = computed(() => {
+  if (year.value) return true
+  const start = new Date(from.value)
+  const end = new Date(to.value)
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return false
+  return Math.abs(end - start) / 86400000 > 62
+})
+const rangeSummary = computed(() => {
+  const rows = stats.value?.revenueByDay || []
+  const revenue = rows.reduce((sum, point) => sum + Number(point.revenue || 0), 0)
+  const bookings = rows.reduce((sum, point) => sum + Number(point.bookings || 0), 0)
+  return `${formatMoney(revenue)} · ${bookings} đơn trong khoảng đã chọn.`
+})
 const stats = ref(null)
 const loading = ref(true)
+const chartLoading = ref(false)
 const error = ref('')
 const pickedDay = ref(null)
 const pickedRoom = ref(null)
 
-onMounted(async () => {
+onMounted(() => loadDashboard(true))
+
+async function loadDashboard(first) {
+  if (first) loading.value = true
+  else chartLoading.value = true
+  error.value = ''
   try {
-    stats.value = await apiFetch('/api/admin/dashboard')
+    stats.value = await apiFetch(`/api/admin/dashboard?from=${from.value}&to=${to.value}`)
   } catch (e) {
     error.value = e.message || 'Không tải được thống kê'
   } finally {
     loading.value = false
+    chartLoading.value = false
   }
-})
+}
+
+function setDays(n) {
+  if (!year.value && days.value === n) return
+  year.value = null
+  days.value = n
+  const today = new Date()
+  from.value = isoDate(addDays(today, -n))
+  to.value = isoDate(today)
+  pickedDay.value = null
+  loadDashboard(false)
+}
+
+function setYear(y) {
+  if (year.value === y) return
+  days.value = null
+  year.value = y
+  from.value = `${y}-01-01`
+  to.value = `${y}-12-31`
+  pickedDay.value = null
+  loadDashboard(false)
+}
+
+function applyRange() {
+  if (!from.value || !to.value) return
+  days.value = null
+  year.value = null
+  pickedDay.value = null
+  loadDashboard(false)
+}
+
+function addDays(date, count) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + count)
+  return next
+}
+
+function isoDate(date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${date.getFullYear()}-${month}-${day}`
+}
+
+function showDate(value) {
+  const [y, m, d] = String(value || '').split('-')
+  return d && m && y ? `${d}/${m}/${y}` : value
+}
 
 function formatMoney(n) {
   return Number(n || 0).toLocaleString('vi-VN') + '₫'
@@ -133,14 +210,30 @@ function statusLabel(s) {
       </div>
 
       <div class="chart-grid">
-        <div class="panel">
-          <div class="panel-head">
-            <h3 class="panel-title">Doanh thu 14 ngày</h3>
+        <div class="panel chart-panel">
+          <h3 class="panel-title">{{ chartTitle }}</h3>
+          <div class="day-picks">
+            <button
+              v-for="n in dayOptions"
+              :key="n"
+              type="button"
+              class="day-pick"
+              :class="{ on: !year && days === n }"
+              @click="setDays(n)"
+            >{{ n }} ngày</button>
+            <button type="button" class="day-pick" :class="{ on: year === thisYear }" @click="setYear(thisYear)">Năm nay</button>
+            <button type="button" class="day-pick" :class="{ on: year === thisYear - 1 }" @click="setYear(thisYear - 1)">Năm trước</button>
           </div>
-          <div v-if="!stats.revenueByDay?.length" class="empty">Chưa có doanh thu</div>
+          <form class="rev-filter" @submit.prevent="applyRange">
+            <label>Từ ngày<input v-model="from" type="date" required /></label>
+            <label>Đến ngày<input v-model="to" type="date" required /></label>
+            <button class="day-pick on" type="submit">Xem</button>
+          </form>
+          <div v-if="chartLoading" class="empty">Đang tải biểu đồ...</div>
+          <div v-else-if="!stats.revenueByDay?.length" class="empty">Chưa có doanh thu</div>
           <template v-else>
-          <p class="chart-hint">Bấm một cột để xem đơn đã thu trong ngày.</p>
-          <div class="bars">
+          <p class="chart-hint">{{ rangeSummary }} Bấm một cột để xem đơn đã thu.</p>
+          <div class="bars" :class="{ year: isWideChart }">
             <button
               v-for="p in stats.revenueByDay"
               :key="p.date"
@@ -193,7 +286,7 @@ function statusLabel(s) {
               <button type="button" class="detail-close" @click="pickedDay = null">Đóng</button>
             </div>
             <p v-if="pickedDay.bookings && !pickedDay.lines" class="empty">Bấm Run lại trong Visual Studio để xem từng đơn của ngày này.</p>
-            <p v-else-if="!pickedDay.lines?.length" class="empty">Ngày này chưa có đơn đã thanh toán.</p>
+            <p v-else-if="!pickedDay.lines?.length" class="empty">Khoảng này chưa có đơn đã thanh toán.</p>
             <table v-else>
               <thead>
                 <tr><th>Đơn</th><th>Phim</th><th>Phòng</th><th>Suất</th><th>Ghế</th><th>Tiền</th></tr>
@@ -309,7 +402,7 @@ function statusLabel(s) {
 </template>
 
 <style scoped>
-.dashboard { display: flex; flex-direction: column; gap: 1.5rem; }
+.dashboard { display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; width: 100%; }
 
 .state {
   display: flex; flex-direction: column; align-items: center;
@@ -402,6 +495,8 @@ function statusLabel(s) {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   margin-bottom: 1rem;
 }
 .panel-title {
@@ -409,6 +504,40 @@ function statusLabel(s) {
   font-weight: 700;
   margin: 0;
   color: var(--text-primary);
+}
+.day-picks { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.75rem; }
+.day-pick {
+  border: 1px solid rgba(255,255,255,0.14);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 999px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.75rem;
+  font-family: inherit;
+  cursor: pointer;
+}
+.day-pick.on { background: #e50914; border-color: #e50914; color: #fff; }
+.rev-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.55rem;
+  margin: -0.35rem 0 0.85rem;
+}
+.rev-filter label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.rev-filter input {
+  background: #141414;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 8px;
+  padding: 0.35rem 0.5rem;
+  color-scheme: dark;
+  font-family: inherit;
 }
 .panel-link {
   font-size: 0.8rem;
@@ -563,17 +692,22 @@ function statusLabel(s) {
 
 .chart-grid {
   display: grid;
-  grid-template-columns: 1.2fr 1fr;
+  grid-template-columns: minmax(0, 1.6fr) minmax(300px, 0.85fr);
   gap: 1rem;
+  align-items: start;
 }
+.chart-grid > .panel { min-width: 0; }
 @media (max-width: 992px) { .chart-grid { grid-template-columns: 1fr; } }
+.chart-panel .panel-title { margin-bottom: 0.75rem; }
 .chart-hint { margin: -0.4rem 0 0.8rem; color: var(--text-muted); font-size: 0.78rem; }
 .bars {
   display: flex; align-items: flex-end; gap: 0.25rem; min-height: 190px;
+  width: 100%; max-width: 100%; overflow-x: auto; padding-bottom: 0.25rem;
 }
+.bars.year .bar-col { flex-basis: 64px; min-width: 64px; }
 .bar-col {
-  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
-  gap: 0.3rem; min-width: 0; background: transparent; border: none; color: inherit;
+  flex: 1 0 42px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+  gap: 0.3rem; min-width: 42px; background: transparent; border: none; color: inherit;
   cursor: pointer; font-family: inherit; padding: 0.25rem 0; border-radius: 8px;
 }
 .bar-col:hover, .bar-col.on { background: rgba(255,255,255,0.04); }
@@ -593,12 +727,13 @@ function statusLabel(s) {
 .occ-total { color: var(--accent-gold); font-weight: 800; }
 .occ-list { display: grid; gap: 0.45rem; }
 .occ-row {
-  display: grid; grid-template-columns: 1fr 120px auto; gap: 0.7rem; align-items: center;
+  display: grid; grid-template-columns: minmax(0, 1fr) 88px auto; gap: 0.7rem; align-items: center;
   width: 100%; text-align: left; background: transparent; border: 1px solid transparent;
   color: inherit; font-family: inherit; cursor: pointer; border-radius: 10px; padding: 0.45rem 0.5rem;
 }
 .occ-row:hover, .occ-row.on { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.08); }
-.occ-meta { display: grid; }
+.occ-meta { display: grid; min-width: 0; }
+.occ-meta strong, .occ-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .occ-meta span { color: var(--text-muted); font-size: 0.75rem; }
 .occ-track, .mini-track { height: 8px; background: rgba(255,255,255,0.08); border-radius: 99px; overflow: hidden; }
 .occ-track i, .mini-track i { display: block; height: 100%; background: #22c55e; }

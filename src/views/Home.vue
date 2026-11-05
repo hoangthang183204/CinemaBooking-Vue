@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiFetch } from '../api'
 
@@ -106,6 +106,29 @@ const visibleMovies = computed(() => {
   )
 })
 
+const MOVIE_PAGE = 8
+const moviePage = ref(1)
+const moviesHead = ref(null)
+const movieTotal = computed(() => visibleMovies.value.length)
+const moviePageCount = computed(() => Math.max(1, Math.ceil(movieTotal.value / MOVIE_PAGE)))
+const pageMovies = computed(() => {
+  const start = (moviePage.value - 1) * MOVIE_PAGE
+  return visibleMovies.value.slice(start, start + MOVIE_PAGE)
+})
+
+watch(movieQuery, () => {
+  moviePage.value = 1
+})
+watch(moviePageCount, (count) => {
+  if (moviePage.value > count) moviePage.value = count
+})
+
+function goMoviePage(next) {
+  if (next < 1 || next > moviePageCount.value || next === moviePage.value) return
+  moviePage.value = next
+  moviesHead.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
+
 function goToShowtimes(movie) {
   router.push({ name: 'MovieShowtimes', params: { id: movie.id } })
 }
@@ -195,7 +218,7 @@ function getPosterGradient(id) {
     <div class="content-wrapper">
       <!-- LEFT: Movies -->
       <div class="movies-column">
-        <div class="section-head">
+        <div ref="moviesHead" class="section-head">
           <h2 class="section-title">Phim đang chiếu</h2>
           <label class="movie-search">
             <input
@@ -217,7 +240,7 @@ function getPosterGradient(id) {
 
         <div v-else class="movie-grid">
           <article
-            v-for="movie in visibleMovies"
+            v-for="movie in pageMovies"
             :key="movie.id"
             class="movie-card"
             @click="goToShowtimes(movie)"
@@ -257,6 +280,14 @@ function getPosterGradient(id) {
             </div>
           </article>
         </div>
+        <nav v-if="movieTotal > MOVIE_PAGE" class="movie-pager" aria-label="Phân trang phim">
+          <span>{{ (moviePage - 1) * MOVIE_PAGE + 1 }}–{{ Math.min(moviePage * MOVIE_PAGE, movieTotal) }} / {{ movieTotal }} phim</span>
+          <div class="movie-pager-actions">
+            <button type="button" :disabled="moviePage <= 1" @click="goMoviePage(moviePage - 1)">Trước</button>
+            <span>{{ moviePage }} / {{ moviePageCount }}</span>
+            <button type="button" :disabled="moviePage >= moviePageCount" @click="goMoviePage(moviePage + 1)">Sau</button>
+          </div>
+        </nav>
       </div>
 
       <!-- RIGHT: Sidebar ads -->
@@ -498,6 +529,33 @@ function getPosterGradient(id) {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
   gap: 1.5rem;
+}
+.movie-pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-top: 1.25rem;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+.movie-pager-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.movie-pager button {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 8px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+.movie-pager button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 .movie-card {
   cursor: pointer;

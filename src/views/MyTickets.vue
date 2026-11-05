@@ -1,32 +1,31 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { apiFetch } from '../api'
-import AdminPager from '../components/AdminPager.vue'
-import { usePager } from '../composables/usePager'
 import { useToast } from '../composables/useToast'
 
+const PAGE_SIZE = 4
 const router = useRouter()
 const toast = useToast()
 
 const list = ref([])
-const { page, pageCount, total, items: pageItems } = usePager(list)
+const page = ref(1)
 const loading = ref(true)
 const error = ref('')
 const selected = ref(null)
 const cancelling = ref(false)
 
-function getToken() {
-  return localStorage.getItem('cb_token')
-}
+const total = computed(() => list.value.length)
+const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+const pageItems = computed(() => {
+  const start = (page.value - 1) * PAGE_SIZE
+  return list.value.slice(start, start + PAGE_SIZE)
+})
+const rangeFrom = computed(() => (total.value === 0 ? 0 : (page.value - 1) * PAGE_SIZE + 1))
+const rangeTo = computed(() => Math.min(page.value * PAGE_SIZE, total.value))
 
 onMounted(async () => {
-  const token = getToken()
-  console.log('=== MyTickets onMounted ===')
-  console.log('Token exists:', !!token)
-  console.log('Token preview:', token ? token.slice(0, 40) + '...' : 'NULL')
-
-  if (!token) {
+  if (!localStorage.getItem('cb_token')) {
     router.push({ path: '/login', query: { redirect: '/my-tickets' } })
     return
   }
@@ -35,22 +34,24 @@ onMounted(async () => {
     const data = await apiFetch('/api/users/my-bookings')
     list.value = Array.isArray(data) ? data : []
   } catch (e) {
-    console.error('Error:', e.message)
     error.value = e.message || 'Không tải được danh sách vé'
   } finally {
     loading.value = false
   }
 })
 
+function goPage(next) {
+  if (next < 1 || next > pageCount.value || next === page.value) return
+  page.value = next
+  selected.value = null
+}
+
 async function showDetail(booking) {
   if (selected.value?.id === booking.id) {
     selected.value = null
     return
   }
-
-  const token = getToken()
-  if (!token) return
-
+  if (!localStorage.getItem('cb_token')) return
   try {
     selected.value = await apiFetch(`/api/bookings/${booking.id}`)
   } catch (_) {
@@ -152,12 +153,22 @@ function formatDateTime(d) {
   if (!d) return '—'
   return new Date(d).toLocaleString('vi-VN')
 }
+
+function showParts(d) {
+  const date = new Date(d)
+  if (Number.isNaN(date.getTime())) return { day: '—', month: '', time: '' }
+  return {
+    day: String(date.getDate()).padStart(2, '0'),
+    month: `Th${date.getMonth() + 1}`,
+    time: date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
+  }
+}
 </script>
 
 <template>
   <div class="page">
     <h1 class="page-title">Vé của tôi</h1>
-    <p class="page-sub">Quản lý và xem chi tiết các vé đã đặt</p>
+    <p class="page-sub">{{ total ? `${total} vé đã đặt` : 'Quản lý và xem chi tiết các vé đã đặt' }}</p>
 
     <div v-if="loading" class="state">
       <div class="spinner" />
@@ -180,9 +191,10 @@ function formatDateTime(d) {
           :class="[String(b.status || '').toLowerCase(), { active: selected?.id === b.id }]"
         >
           <button type="button" class="ticket-face" @click="showDetail(b)">
-            <div class="stub">
-              <span>Vé</span>
-              <strong>#{{ b.id }}</strong>
+            <div class="date-block" :class="String(b.status || '').toLowerCase()">
+              <strong>{{ showParts(b.showTimeStart).day }}</strong>
+              <span>{{ showParts(b.showTimeStart).month }}</span>
+              <em>{{ showParts(b.showTimeStart).time }}</em>
             </div>
             <div class="ticket-main">
               <div class="title-row">
@@ -191,11 +203,12 @@ function formatDateTime(d) {
                   {{ statusLabel(b.status) }}
                 </span>
               </div>
-              <p>{{ formatDateTime(b.showTimeStart) }} · {{ b.roomName || 'Phòng' }}</p>
-              <p>Ghế {{ (b.seatNumbers || []).join(', ') || '—' }}</p>
+              <p>{{ b.roomName || 'Phòng' }} · Đơn #{{ b.id }}</p>
+              <p class="seats">Ghế {{ (b.seatNumbers || []).join(', ') || '—' }}</p>
             </div>
-            <div class="ticket-price">
-              {{ Number(b.totalPrice || 0).toLocaleString('vi-VN') }}₫
+            <div class="ticket-side">
+              <strong>{{ Number(b.totalPrice || 0).toLocaleString('vi-VN') }}₫</strong>
+              <span>{{ selected?.id === b.id ? 'Thu gọn' : 'Chi tiết' }}</span>
             </div>
           </button>
 
@@ -274,7 +287,21 @@ function formatDateTime(d) {
           </div>
         </article>
       </div>
-      <AdminPager v-if="list.length" v-model:page="page" :page-count="pageCount" :total="total" />
+      <nav v-if="total > PAGE_SIZE" class="pager" aria-label="Phân trang vé">
+        <span>{{ rangeFrom }}–{{ rangeTo }} / {{ total }} vé</span>
+        <div class="pager-actions">
+          <button type="button" :disabled="page <= 1" @click="goPage(page - 1)">Trước</button>
+          <button
+            v-for="n in pageCount"
+            :key="n"
+            type="button"
+            class="page-num"
+            :class="{ on: n === page }"
+            @click="goPage(n)"
+          >{{ n }}</button>
+          <button type="button" :disabled="page >= pageCount" @click="goPage(page + 1)">Sau</button>
+        </div>
+      </nav>
     </template>
   </div>
 </template>
@@ -325,21 +352,21 @@ function formatDateTime(d) {
   box-shadow: var(--shadow-glow-red);
 }
 
-.tickets-list { display: flex; flex-direction: column; gap: 0.75rem; }
+.tickets-list { display: flex; flex-direction: column; gap: 0.8rem; }
 
 .ticket-card {
   background: var(--bg-card);
   border: 1px solid var(--border-subtle);
-  border-radius: 16px;
+  border-radius: 18px;
   overflow: hidden;
 }
-.ticket-card.active { border-color: rgba(229, 9, 20, 0.45); }
+.ticket-card.active { border-color: rgba(229, 9, 20, 0.5); }
 .ticket-face {
   width: 100%;
   display: grid;
-  grid-template-columns: 72px minmax(0, 1fr) auto;
-  gap: 0.9rem;
-  align-items: center;
+  grid-template-columns: 84px minmax(0, 1fr) auto;
+  gap: 0;
+  align-items: stretch;
   padding: 0;
   border: none;
   background: transparent;
@@ -348,24 +375,26 @@ function formatDateTime(d) {
   cursor: pointer;
   font-family: inherit;
 }
-.stub {
-  min-height: 108px;
+.date-block {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 0.2rem;
-  background: #e50914;
+  gap: 0.05rem;
+  min-height: 112px;
+  background: #1f2937;
   color: #fff;
+  border-right: 1px dashed rgba(255,255,255,0.18);
 }
-.ticket-card.paid .stub { background: #15803d; }
-.ticket-card.cancelled .stub,
-.ticket-card.refunded .stub { background: #374151; }
-.ticket-card.refundcompleted .stub { background: #0369a1; }
-.stub span { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; }
-.stub strong { font-size: 1rem; }
-.ticket-main { min-width: 0; padding: 0.85rem 0; }
-.title-row { display: flex; align-items: center; gap: 0.55rem; }
+.date-block strong { font-size: 1.45rem; line-height: 1; }
+.date-block span { font-size: 0.75rem; color: #d1d5db; }
+.date-block em { margin-top: 0.35rem; font-style: normal; font-size: 0.75rem; color: #fbbf24; }
+.date-block.paid { background: #14532d; }
+.date-block.pending { background: #78350f; }
+.date-block.cancelled, .date-block.refunded { background: #374151; }
+.date-block.refundcompleted { background: #0c4a6e; }
+.ticket-main { min-width: 0; padding: 0.95rem 1rem; }
+.title-row { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
 .title-row h3 {
   margin: 0;
   font-size: 1.05rem;
@@ -373,18 +402,52 @@ function formatDateTime(d) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.ticket-main p { margin: 0.2rem 0 0; color: var(--text-muted); font-size: 0.86rem; }
+.ticket-main p { margin: 0.28rem 0 0; color: var(--text-muted); font-size: 0.86rem; }
+.seats { color: var(--text-primary) !important; }
 .status-pill {
-  padding: 0.2rem 0.6rem;
+  flex-shrink: 0;
+  padding: 0.18rem 0.55rem;
   border-radius: 999px;
-  font-size: 0.7rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
 }
-.status-pill.pending { background: rgba(234, 179, 8, 0.15); color: #fbbf24; }
-.status-pill.paid { background: rgba(34, 197, 94, 0.15); color: #22c55e; }
-.status-pill.cancelled, .status-pill.refunded { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+.status-pill.pending { background: rgba(251, 191, 36, 0.16); color: #fbbf24; }
+.status-pill.paid { background: rgba(34, 197, 94, 0.16); color: #4ade80; }
+.status-pill.cancelled, .status-pill.refunded { background: rgba(248, 113, 113, 0.16); color: #fca5a5; }
+.status-pill.refundcompleted { background: rgba(56, 189, 248, 0.16); color: #7dd3fc; }
+.ticket-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0 1rem;
+}
+.ticket-side strong { color: var(--accent-gold); font-size: 1.05rem; }
+.ticket-side span { color: var(--text-muted); font-size: 0.75rem; }
+.pager {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+.pager-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.pager button {
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 8px;
+  min-width: 2.1rem;
+  padding: 0.4rem 0.7rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+.pager button.on { background: #e50914; border-color: #e50914; color: #fff; }
+.pager button:disabled { opacity: 0.4; cursor: not-allowed; }
 .cancel-box {
   margin-top: 1rem;
   padding-top: 0.9rem;
@@ -403,12 +466,6 @@ function formatDateTime(d) {
 }
 .cancel-btn:disabled { opacity: 0.6; cursor: default; }
 .closed-note { margin: 0.8rem 0 0; color: #fbbf24; font-size: 0.85rem; }
-.ticket-price {
-  padding-right: 1rem;
-  font-size: 1rem;
-  font-weight: 800;
-  color: var(--accent-gold);
-}
 .detail-panel {
   padding: 0 1rem 1rem 1rem;
   border-top: 1px dashed rgba(255, 255, 255, 0.12);
@@ -491,8 +548,9 @@ function formatDateTime(d) {
 }
 
 @media (max-width: 640px) {
-  .ticket-face { grid-template-columns: 64px minmax(0, 1fr); }
-  .ticket-price { display: none; }
+  .ticket-face { grid-template-columns: 72px minmax(0, 1fr); }
+  .ticket-side { display: none; }
   .pay-box { flex-direction: column; align-items: stretch; }
+  .pager { flex-direction: column; align-items: flex-start; }
 }
 </style>

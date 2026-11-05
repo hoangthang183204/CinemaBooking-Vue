@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { apiFetch } from '../api'
 import { homeForRole, useAuth } from '../auth'
@@ -12,6 +12,19 @@ const email = ref('')
 const password = ref('')
 const loading = ref(false)
 const error = ref('')
+const googleSlot = ref(null)
+const googleClientId = import.meta.env.VITE_GOOGLE_CLIENT_ID || ''
+
+function goAfterLogin(result) {
+  auth.setAuth(result)
+  const role = result.role
+  const requested = typeof route.query.redirect === 'string' ? route.query.redirect : ''
+  let target = homeForRole(role)
+  if (role === 'Admin' && requested.startsWith('/admin')) target = requested
+  else if (role === 'Staff' && requested.startsWith('/staff')) target = requested
+  else if (role !== 'Admin' && role !== 'Staff' && requested.startsWith('/') && !requested.startsWith('//')) target = requested
+  router.push(target)
+}
 
 async function handleLogin() {
   if (!email.value || !password.value) {
@@ -29,22 +42,70 @@ async function handleLogin() {
         password: password.value,
       }),
     })
-
-    auth.setAuth(result)
-
-    const role = result.role
-    const requested = typeof route.query.redirect === 'string' ? route.query.redirect : ''
-    let target = homeForRole(role)
-    if (role === 'Admin' && requested.startsWith('/admin')) target = requested
-    else if (role === 'Staff' && requested.startsWith('/staff')) target = requested
-    else if (role !== 'Admin' && role !== 'Staff' && requested.startsWith('/')) target = requested
-    router.push(target)
+    goAfterLogin(result)
   } catch (e) {
     error.value = e.message || 'Email hoặc mật khẩu không đúng'
   } finally {
     loading.value = false
   }
 }
+
+async function onGoogleCredential(response) {
+  loading.value = true
+  error.value = ''
+  try {
+    const result = await apiFetch('/api/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ idToken: response?.credential || '' }),
+    })
+    goAfterLogin(result)
+  } catch (e) {
+    error.value = e.message || 'Không đăng nhập được bằng Google'
+  } finally {
+    loading.value = false
+  }
+}
+
+function googleUnavailable() {
+  error.value = 'Chưa cấu hình VITE_GOOGLE_CLIENT_ID. Các bước tạo Client ID nằm trong README.'
+}
+
+function loadGoogleScript() {
+  return new Promise((resolve, reject) => {
+    if (window.google?.accounts?.id) {
+      resolve()
+      return
+    }
+    const script = document.createElement('script')
+    script.src = 'https://accounts.google.com/gsi/client'
+    script.async = true
+    script.onload = () => resolve()
+    script.onerror = () => reject(new Error('Không tải được nút Google'))
+    document.head.appendChild(script)
+  })
+}
+
+onMounted(async () => {
+  if (!googleClientId || !googleSlot.value) return
+  try {
+    await loadGoogleScript()
+    window.google.accounts.id.initialize({
+      client_id: googleClientId,
+      callback: onGoogleCredential,
+    })
+    window.google.accounts.id.renderButton(googleSlot.value, {
+      type: 'standard',
+      theme: 'outline',
+      size: 'large',
+      text: 'continue_with',
+      shape: 'rectangular',
+      width: 340,
+      locale: 'vi',
+    })
+  } catch (e) {
+    error.value = e.message
+  }
+})
 </script>
 
 <template>
@@ -89,6 +150,15 @@ async function handleLogin() {
           {{ loading ? 'Đang đăng nhập...' : 'Đăng nhập' }}
         </button>
       </form>
+
+      <div class="or-line"><span>hoặc</span></div>
+      <div class="google-wrap">
+        <button v-if="!googleClientId" type="button" class="btn-google" @click="googleUnavailable">
+          <span class="g-mark">G</span>
+          Đăng nhập bằng Google
+        </button>
+        <div v-else ref="googleSlot" class="google-slot"></div>
+      </div>
 
       <div class="auth-footer">
         <span>Chưa có tài khoản?</span>
@@ -188,6 +258,49 @@ async function handleLogin() {
   transform: translateY(-1px);
 }
 .btn-submit:disabled { opacity: 0.6; cursor: not-allowed; }
+.or-line {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 1.25rem 0 1rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.or-line::before,
+.or-line::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-subtle);
+}
+.google-slot { display: flex; justify-content: center; min-height: 44px; }
+.btn-google {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.65rem;
+  padding: 0.75rem 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: #fff;
+  color: #1f1f1f;
+  font-weight: 600;
+  font-family: inherit;
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+.g-mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: #fff;
+  color: #4285f4;
+  font-weight: 800;
+  border: 1px solid #e5e7eb;
+}
 .auth-footer {
   display: flex;
   justify-content: center;

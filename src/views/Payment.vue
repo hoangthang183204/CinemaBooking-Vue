@@ -20,11 +20,16 @@ const payError = ref('')
 const allMethods = [
   { id: 'counter', name: 'Tại quầy', desc: 'Hiện hóa đơn và QR để nhân viên thu tiền', icon: '🎟️' },
   { id: 'vnpay', name: 'VNPay', desc: 'Chuyển sang trang VNPay để trả bằng thẻ ATM hoặc ứng dụng ngân hàng', icon: '🏦' },
-  { id: 'momo', name: 'MoMo', desc: 'Ví điện tử MoMo', icon: '📱' },
+  { id: 'momo', name: 'MoMo', desc: 'Chuyển sang trang MoMo để trả bằng ví test', icon: '📱' },
   { id: 'stripe', name: 'Stripe', desc: 'Thẻ quốc tế Visa/Master', icon: '💳' },
 ]
 const vnpayReady = ref(false)
-const methods = computed(() => allMethods.filter((item) => item.id !== 'vnpay' || vnpayReady.value))
+const momoReady = ref(false)
+const methods = computed(() => allMethods.filter((item) => {
+  if (item.id === 'vnpay') return vnpayReady.value
+  if (item.id === 'momo') return momoReady.value
+  return true
+}))
 const selectedMethod = ref('counter')
 const billOpen = ref(false)
 const onlineUrl = ref('')
@@ -78,13 +83,15 @@ onMounted(async () => {
   try {
     const [detail, options, settings] = await Promise.all([
       apiFetch(`/api/bookings/${props.bookingId}`),
-      apiFetch('/api/payment/methods').catch(() => ({ vnpay: false })),
+      apiFetch('/api/payment/methods').catch(() => ({ vnpay: false, momo: false })),
       apiFetch('/api/settings/public').catch(() => null),
     ])
     booking.value = detail
     if (settings?.seatPrice) seatPrice.value = Number(settings.seatPrice)
     vnpayReady.value = !!options?.vnpay
-    if (!vnpayReady.value && selectedMethod.value === 'vnpay') selectedMethod.value = 'counter'
+    momoReady.value = !!options?.momo
+    if ((!vnpayReady.value && selectedMethod.value === 'vnpay') || (!momoReady.value && selectedMethod.value === 'momo'))
+      selectedMethod.value = 'counter'
   } catch (e) {
     console.error('Error loading booking:', e.message)
     error.value = e.message || 'Không tải được thông tin đặt chỗ'
@@ -126,7 +133,7 @@ async function goToPayment() {
         payError.value = 'Không tạo được link thanh toán'
         return
       }
-      if (selectedMethod.value === 'vnpay') {
+      if (selectedMethod.value === 'vnpay' || selectedMethod.value === 'momo') {
         window.location.href = result.paymentUrl
         return
       }
@@ -288,7 +295,9 @@ function formatDateTime(d) {
                 ? 'Đang chuyển sang cổng thanh toán...'
                 : selectedMethod === 'vnpay'
                   ? `Thanh toán VNPay ${money(bill.total)}`
-                  : `Thanh toán ${money(bill.total)}`
+                  : selectedMethod === 'momo'
+                    ? `Thanh toán MoMo ${money(bill.total)}`
+                    : `Thanh toán ${money(bill.total)}`
             }}
           </button>
         </div>
